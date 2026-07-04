@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle,
   ChevronLeft,
+  Download,
   ExternalLink,
   GitMerge,
   Loader2,
@@ -14,8 +15,10 @@ import {
   XCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import * as XLSX from 'xlsx'
 import { SectionHeader } from '@/components/layout/section-header'
 import { Button } from '@/components/ui/button'
+import { beginGlobalRequest, endGlobalRequest } from '@/lib/network-loading'
 import { Badge } from '@/components/ui/badge'
 import { DataTable, type ColumnDef } from '@/components/ui/data-table'
 import {
@@ -627,6 +630,74 @@ export function RegistrationsPage() {
     },
   ]
 
+  const handleDownloadExcel = async () => {
+    const requestId = beginGlobalRequest()
+    try {
+      const approved = await api.getRegistrationRequests({ status: 'approved' })
+      if (!approved.length) {
+        toast.info('No hay solicitudes aprobadas para descargar')
+        return
+      }
+
+      const rows = approved.flatMap((req) => {
+        const tower = req.tower as { code?: string; name?: string } | null
+        const apt = req.apartment as { number?: string } | null
+        const towerLabel = tower ? `${tower.code ?? ''} - ${tower.name ?? ''}`.replace(/^ - /, '') : '—'
+        const aptNumber = apt?.number ?? '—'
+
+        return req.persons.map((person) => {
+          const vehiclesStr = req.vehicles
+            .map((v) => {
+              const parts = [v.plate, v.brandName, v.model, v.color, v.vehicleType].filter(Boolean)
+              return parts.join(' · ')
+            })
+            .join('; ')
+
+          return {
+            Torre: towerLabel,
+            Apartamento: aptNumber,
+            Nombre: person.name,
+            Apellido: person.lastName,
+            'Cédula/Pasaporte': person.document,
+            Teléfono: person.phone ?? '',
+            Email: person.email ?? '',
+            Tipo: person.isOwner ? 'Propietario' : 'Arrendatario',
+            'Fecha de Nacimiento': person.birthDate ?? '',
+            Vehículos: vehiclesStr,
+            'Fecha de Solicitud': formatDate(req.submittedAt),
+          }
+        })
+      })
+
+      rows.sort((a, b) => {
+        const tc = a.Torre.localeCompare(b.Torre)
+        if (tc !== 0) return tc
+        const ac = a.Apartamento.localeCompare(b.Apartamento, undefined, { numeric: true })
+        if (ac !== 0) return ac
+        return `${a.Apellido} ${a.Nombre}`.localeCompare(`${b.Apellido} ${b.Nombre}`)
+      })
+
+      const ws = XLSX.utils.json_to_sheet(rows)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Aprobados')
+
+      const colWidths = Object.keys(rows[0] ?? {}).map((key) => ({
+        wch: Math.max(
+          key.length,
+          ...rows.map((r) => String(r[key as keyof typeof r] ?? '').length),
+        ),
+      }))
+      ws['!cols'] = colWidths
+
+      XLSX.writeFile(wb, `solicitudes-aprobadas-${new Date().toISOString().slice(0, 10)}.xlsx`)
+      toast.success('Excel descargado exitosamente')
+    } catch {
+      toast.error('Error al descargar el Excel')
+    } finally {
+      endGlobalRequest(requestId)
+    }
+  }
+
   const STATUS_OPTIONS = [
     { value: '', label: 'Todos' },
     { value: 'pending', label: 'Pendientes' },
@@ -642,22 +713,28 @@ export function RegistrationsPage() {
         description="Revisión de solicitudes enviadas por futuros residentes"
       />
 
-      <div className="flex gap-2">
-        {STATUS_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => setStatusFilter(opt.value)}
-            className={cn(
-              'rounded-full px-3 py-1 text-xs font-medium transition',
-              statusFilter === opt.value
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
-            )}
-          >
-            {opt.label}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex gap-2">
+          {STATUS_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setStatusFilter(opt.value)}
+              className={cn(
+                'rounded-full px-3 py-1 text-xs font-medium transition',
+                statusFilter === opt.value
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <Button variant="outline" size="sm" onClick={handleDownloadExcel}>
+          <Download className="size-4" />
+          Descargar Excel
+        </Button>
       </div>
 
       <DataTable columns={columns} data={requests} isLoading={isLoading} />
