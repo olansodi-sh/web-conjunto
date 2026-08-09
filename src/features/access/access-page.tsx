@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tansta
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Building2, CalendarX2, Clock3, DoorOpen, Search, UserRoundPlus, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useScanInput, extractDocumentFromBarcode } from '@/hooks/use-webhid-scanner'
+import { parseColombianCedula } from '@/lib/colombian-cedula'
 import { z } from 'zod'
 import { SectionHeader } from '@/components/layout/section-header'
 import { KpiCard } from '@/components/dashboard/kpi-card'
@@ -206,9 +207,6 @@ function RegisterEntryDialog() {
   const [open, setOpen] = useState(false)
   const [searchDoc, setSearchDoc] = useState('')
   const [phase, setPhase] = useState<SearchPhase>({ kind: 'idle' })
-  const [selectedTowerId, setSelectedTowerId] = useState('')
-  const [towerOpen, setTowerOpen] = useState(false)
-  const [towerSearch, setTowerSearch] = useState('')
   const [aptOpen, setAptOpen] = useState(false)
   const [aptSearch, setAptSearch] = useState('')
   const [brandOpen, setBrandOpen] = useState(false)
@@ -218,6 +216,7 @@ function RegisterEntryDialog() {
   const [historyPhotoPath, setHistoryPhotoPath] = useState<string | null>(null)
   const [createVisitorSubmitting, setCreateVisitorSubmitting] = useState(false)
   const [entrySubmitting, setEntrySubmitting] = useState(false)
+  const lastScannedTextRef = useRef('')
 
   const photoPreview = useMemo(() => (photoFile ? URL.createObjectURL(photoFile) : null), [photoFile])
   const historyPhotoPreview = useMemo(() => resolveUploadPath(historyPhotoPath), [historyPhotoPath])
@@ -229,12 +228,10 @@ function RegisterEntryDialog() {
     [photoPreview],
   )
 
-  const towersQuery = useQuery({ queryKey: ['towers'], queryFn: api.getTowers })
   const brandsQuery = useQuery({ queryKey: ['vehicle-brands'], queryFn: api.getVehicleBrands })
   const apartmentsQuery = useQuery({
-    queryKey: ['apartments', selectedTowerId],
-    queryFn: () => api.getApartments({ towerId: selectedTowerId || undefined, limit: 200 }),
-    enabled: Boolean(selectedTowerId),
+    queryKey: ['apartments', 'access-entry-all'],
+    queryFn: () => api.getApartments({ limit: 1000 }),
   })
 
   const createVisitorForm = useForm<z.infer<typeof createVisitorSchema>>({
@@ -298,8 +295,6 @@ function RegisterEntryDialog() {
       notes: '',
     })
 
-    setSelectedTowerId('')
-    setTowerOpen(false)
     setAptOpen(false)
     setBrandOpen(false)
     setBrandSearch('')
@@ -329,8 +324,6 @@ function RegisterEntryDialog() {
       notes: '',
     })
 
-    setSelectedTowerId(towerId)
-    setTowerOpen(false)
     setAptOpen(false)
     setBrandOpen(false)
     setBrandSearch('')
@@ -358,6 +351,11 @@ function RegisterEntryDialog() {
         const searchedDocument = searchDoc.trim()
         setPhase({ kind: 'not_found', document: searchedDocument })
         createVisitorForm.setValue('document', searchedDocument)
+        const cedula = parseColombianCedula(lastScannedTextRef.current)
+        if (cedula && cedula.documentNumber === searchedDocument) {
+          createVisitorForm.setValue('name', `${cedula.firstName1} ${cedula.firstName2}`.trim())
+          createVisitorForm.setValue('lastName', `${cedula.lastName1} ${cedula.lastName2}`.trim())
+        }
         applyVisitorLastAccessDefaults(null)
         return
       }
@@ -438,6 +436,7 @@ function RegisterEntryDialog() {
   const canScan = open && (phase.kind === 'idle' || phase.kind === 'not_found')
   useScanInput(useCallback((value: string) => {
     const doc = extractDocumentFromBarcode(value)
+    lastScannedTextRef.current = value
     setSearchDoc(doc)
     searchVisitorMutation.mutate(doc)
   }, [searchVisitorMutation]), canScan)
@@ -446,8 +445,6 @@ function RegisterEntryDialog() {
     setSearchDoc('')
     setPlateSearch('')
     setPhase({ kind: 'idle' })
-    setSelectedTowerId('')
-    setTowerOpen(false)
     setAptOpen(false)
     setBrandOpen(false)
     createVisitorForm.reset()
@@ -630,51 +627,30 @@ function RegisterEntryDialog() {
 
 	              <form className="space-y-3" onSubmit={handleEntrySubmit}>
 	                <fieldset disabled={phase.kind !== 'ready'} className="space-y-3 disabled:opacity-60">
-	                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Torre" error={entryForm.formState.errors.towerId?.message}>
-                    <FilterableSelect
-                      open={towerOpen}
-                      onOpenChange={setTowerOpen}
-                      value={selectedTowerId}
-                      displayValue={(towersQuery.data ?? []).find((t) => t.id === selectedTowerId)?.name ?? ''}
-                      placeholder="Selecciona torre"
-                      searchPlaceholder="Filtrar torre..."
-                      items={towersQuery.data ?? []}
-                      getKey={(t) => t.id}
-                      getLabel={(t) => `${t.name} (${t.code})`}
-                      onSelect={(t) => {
-                        setSelectedTowerId(t.id)
-                        entryForm.setValue('towerId', t.id, { shouldValidate: true })
-                        entryForm.setValue('apartmentId', '')
-                        setTowerOpen(false)
-                        setAptOpen(true)
-                      }}
-                      searchValue={towerSearch}
-                      onSearchValueChange={setTowerSearch}
-                    />
-                  </Field>
-
-                  <Field label="Apartamento" error={entryForm.formState.errors.apartmentId?.message}>
-                    <FilterableSelect
-                      open={aptOpen}
-                      onOpenChange={setAptOpen}
-                      value={selectedApartmentId}
-                      displayValue={selectedApartment ? `Apt. ${selectedApartment.number}` : ''}
-                      placeholder={!selectedTowerId ? 'Primero elige torre' : 'Selecciona apt.'}
-                      searchPlaceholder="Filtrar por número o piso..."
-                      disabled={!selectedTowerId}
-                      items={filteredApartments}
-                      getKey={(a) => a.id}
-                      getLabel={(a) => `Apt. ${a.number}${a.floor != null ? ` · Piso ${a.floor}` : ''}`}
-                      onSelect={(a) => {
-                        entryForm.setValue('apartmentId', a.id, { shouldValidate: true })
-                        setAptOpen(false)
-                      }}
-                      searchValue={aptSearch}
-                      onSearchValueChange={setAptSearch}
-                    />
-                  </Field>
-                </div>
+	                <Field label="Apartamento" error={entryForm.formState.errors.apartmentId?.message ?? entryForm.formState.errors.towerId?.message}>
+                  <FilterableSelect
+                    open={aptOpen}
+                    onOpenChange={setAptOpen}
+                    value={selectedApartmentId}
+                    displayValue={
+                      selectedApartment
+                        ? `${selectedApartment.tower ?? 'Torre'} · Apt. ${selectedApartment.number}`
+                        : ''
+                    }
+                    placeholder="Buscar torre o apto"
+                    searchPlaceholder="Buscar torre o apto"
+                    items={filteredApartments}
+                    getKey={(a) => a.id}
+                    getLabel={(a) => `${a.tower ?? 'Torre'} · Apt. ${a.number}${a.floor != null ? ` · Piso ${a.floor}` : ''}`}
+                    onSelect={(a) => {
+                      entryForm.setValue('towerId', a.towerId, { shouldValidate: true })
+                      entryForm.setValue('apartmentId', a.id, { shouldValidate: true })
+                      setAptOpen(false)
+                    }}
+                    searchValue={aptSearch}
+                    onSearchValueChange={setAptSearch}
+                  />
+                </Field>
 
                 <Field label="Tipo de entrada" error={entryForm.formState.errors.entryType?.message}>
                   <Select
