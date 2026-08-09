@@ -201,12 +201,16 @@ export const api = {
   deleteResidentVehicle: (id: string) =>
     unwrap<void>(apiClient.delete(`/resident-vehicles/${id}`)),
 
-  getAccessAudit: (params?: { page?: number; limit?: number; search?: string; type?: string; entryType?: string; entryTime?: string; dateFrom?: string; dateTo?: string; towerId?: string; apartmentId?: string }) =>
+  getAccessAudit: (params?: { page?: number; limit?: number; search?: string; type?: string; entryType?: string; visitorCategory?: string; entryTime?: string; dateFrom?: string; dateTo?: string; towerId?: string; apartmentId?: string }) =>
     unwrap<PaginatedResponse<AccessAudit>>(apiClient.get('/access-audit', { params })),
   searchAccessByPlate: (plate: string) =>
     unwrap<PlateSearchResult>(apiClient.get('/access-audit/search-plate', { params: { plate } })),
   locatePlate: (plate: string) =>
     unwrap<PlateLocationResult>(apiClient.get('/access-audit/locate-plate', { params: { plate } })),
+  searchOpenAccessByDocument: (document: string) =>
+    unwrap<{ visitor: Visitor | null; openAccess: AccessAudit | null }>(
+      apiClient.get('/access-audit/search-open-by-document', { params: { document } }),
+    ),
   getAccessAuditStats: () =>
     unwrap<{ total: number; today: number; uniqueVisitorsToday: number }>(apiClient.get('/access-audit/stats')),
   getFrequentVisitors: (apartmentId: string, limit = 5) =>
