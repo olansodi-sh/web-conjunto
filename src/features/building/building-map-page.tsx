@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Bell, Package, DoorOpen, ArrowLeft, ChevronRight, Search, X, PhoneCall, Zap } from 'lucide-react'
 import { useScanInput, extractDocumentFromBarcode } from '@/hooks/use-webhid-scanner'
+import { parseColombianCedula } from '@/lib/colombian-cedula'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { z } from 'zod'
 import { SectionHeader } from '@/components/layout/section-header'
@@ -666,6 +667,11 @@ function AptDetailDialog({
         const searchedDocument = accessSearchDoc.trim()
         setAccessPhase({ kind: 'not_found', document: searchedDocument })
         createVisitorForm.setValue('document', searchedDocument)
+        const cedula = parseColombianCedula(lastScannedTextRef.current)
+        if (cedula && cedula.documentNumber === searchedDocument) {
+          createVisitorForm.setValue('name', `${cedula.firstName1} ${cedula.firstName2}`.trim())
+          createVisitorForm.setValue('lastName', `${cedula.lastName1} ${cedula.lastName2}`.trim())
+        }
         applyAccessDefaults(null)
         return
       }
@@ -783,9 +789,14 @@ function AptDetailDialog({
     )
   }
 
+  const lastScannedTextRef = useRef('')
+
   const canScanBarcode = open && view === 'access' && (accessPhase.kind === 'idle' || accessPhase.kind === 'not_found')
   useScanInput((value: string) => {
     const doc = extractDocumentFromBarcode(value)
+    console.log('[scanner] raw value:', JSON.stringify(value))
+    console.log('[scanner] extracted document:', doc)
+    lastScannedTextRef.current = value
     setAccessSearchDoc(doc)
     searchVisitorMutation.mutate(doc)
   }, canScanBarcode)

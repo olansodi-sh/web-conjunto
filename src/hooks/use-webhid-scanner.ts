@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { extractCedulaDocumentNumber } from '@/lib/colombian-cedula'
 
 const ZEBRA_VENDOR_ID = 0x05e0
 const ZEBRA_PRODUCT_ID = 0x1300
@@ -30,17 +31,50 @@ declare global {
   }
 }
 
-function parseSnapi(data: Uint8Array): string {
-  // SNAPI: byte 0 = msg type (0x04 = decode data), byte 1 = total len, byte 2 = symbology, byte 3+ = ASCII data
-  // Fallback: scan all printable bytes ignoring CR/LF/NUL
-  const start = data[0] === 0x04 ? 3 : 0
-  const bytes: number[] = []
-  for (let i = start; i < data.length; i++) {
-    const b = data[i]
-    if (b === 0x00 || b === 0x0d || b === 0x0a) continue
-    if (b >= 0x20 && b <= 0x7e) bytes.push(b)
+// A PDF417 payload (Colombian cedula) is much bigger than a single USB HID
+// report can carry, so the scanner splits it across several consecutive
+// `inputreport` events. Only the FIRST report of a scan carries the SNAPI
+// header (byte 0 = msg type, byte 1 = payload length in this report, byte 2
+// = symbology); continuation reports are raw payload bytes. Reports for the
+// same physical scan arrive within a few ms of each other, so we buffer
+// bytes and only finalize/dispatch once no new report has arrived for a
+// short quiet period.
+const SCAN_FLUSH_QUIET_MS = 120
+
+function sanitizeForUse(bytes: number[]): string {
+  // The Colombian cedula PDF417 packs several unrelated fields (a serial
+  // number, an internal tag, the actual document number, names...) back to
+  // back inside one HID report, separated only by runs of NUL bytes. Those
+  // NUL runs MUST become a visible separator (not be deleted) or unrelated
+  // numeric fields silently fuse into one bogus digit blob.
+  let out = ''
+  let inGap = false
+  for (const b of bytes) {
+    if (b === 0x00 || b === 0x0d || b === 0x0a) {
+      if (!inGap) { out += ' '; inGap = true }
+      continue
+    }
+    inGap = false
+    if (b >= 0x20 && b <= 0x7e) out += String.fromCharCode(b)
   }
-  return String.fromCharCode(...bytes).trim()
+  return out.trim().replace(/ {2,}/g, ' ')
+}
+
+// Debug-only decode that keeps structure visible instead of silently
+// dropping control bytes, so field separators used by the card issuer show up.
+function debugDecode(bytes: number[]): string {
+  return bytes
+    .map((b) => {
+      if (b === 0x1d) return '<GS>'
+      if (b === 0x1e) return '<RS>'
+      if (b === 0x1f) return '<US>'
+      if (b === 0x0d) return '<CR>'
+      if (b === 0x0a) return '<LF>'
+      if (b === 0x00) return ''
+      if (b >= 0x20 && b <= 0x7e) return String.fromCharCode(b)
+      return `<${b.toString(16).padStart(2, '0')}>`
+    })
+    .join('')
 }
 
 export function useWebHidScanner() {
@@ -48,14 +82,35 @@ export function useWebHidScanner() {
     typeof navigator !== 'undefined' && 'hid' in navigator ? 'disconnected' : 'unsupported',
   )
   const deviceRef = useRef<HidDevice | null>(null)
+  const bufferRef = useRef<number[]>([])
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const handleInputReport = useCallback((event: HidInputReportEvent) => {
-    const data = new Uint8Array(event.data.buffer)
-    const barcode = parseSnapi(data)
+  const flush = useCallback(() => {
+    const bytes = bufferRef.current
+    bufferRef.current = []
+    flushTimerRef.current = null
+    if (bytes.length === 0) return
+
+    console.log('[scanner:webhid] full raw bytes:', bytes.map((b) => b.toString(16).padStart(2, '0')).join(' '))
+    console.log('[scanner:webhid] full decoded (debug, separators visible):', debugDecode(bytes))
+
+    const barcode = sanitizeForUse(bytes)
+    console.log('[scanner:webhid] sanitized value used for search:', JSON.stringify(barcode))
     if (barcode.length >= 4) {
       window.dispatchEvent(new CustomEvent(SCANNER_EVENT, { detail: { value: barcode } }))
     }
   }, [])
+
+  const handleInputReport = useCallback((event: HidInputReportEvent) => {
+    const data = new Uint8Array(event.data.buffer)
+    const isFirstChunk = bufferRef.current.length === 0
+    // Only the first report of a scan carries the 3-byte SNAPI header.
+    const start = isFirstChunk && data[0] === 0x04 ? 3 : 0
+    for (let i = start; i < data.length; i++) bufferRef.current.push(data[i])
+
+    if (flushTimerRef.current) clearTimeout(flushTimerRef.current)
+    flushTimerRef.current = setTimeout(flush, SCAN_FLUSH_QUIET_MS)
+  }, [flush])
 
   const openDevice = useCallback(async (device: HidDevice) => {
     if (!device.opened) await device.open()
@@ -101,6 +156,7 @@ export function useWebHidScanner() {
         void d.close().catch(() => {})
         deviceRef.current = null
       }
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current)
     }
   }, [openDevice, handleInputReport])
 
@@ -109,14 +165,17 @@ export function useWebHidScanner() {
 
 /**
  * Extracts the most likely document/ID number from raw barcode data.
- * Colombian cedula PDF417 barcodes encode structured binary data that starts
- * with non-numeric bytes before the actual CC number. This pulls the longest
- * contiguous alphanumeric sequence, preferring all-digit runs (cedula numbers).
+ * Tries the Colombian cedula PDF417 layout first (see colombian-cedula.ts),
+ * then falls back to generic heuristics for other symbologies (1D Code128,
+ * cedula de extranjeria, passports, etc).
  */
 export function extractDocumentFromBarcode(raw: string): string {
   const trimmed = raw.trim()
   // Already clean: only alphanumeric chars (typical 1D Code128 scan)
   if (/^[A-Za-z0-9]{4,}$/.test(trimmed)) return trimmed
+
+  const cedulaDocument = extractCedulaDocumentNumber(trimmed)
+  if (cedulaDocument) return cedulaDocument
 
   // Prefer longest all-digit sequence (Colombian CC = 6-10 digits)
   const digitRuns = [...trimmed.matchAll(/\d{5,15}/g)].map((m) => m[0])
