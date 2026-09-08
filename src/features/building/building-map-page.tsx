@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Bell, Package, DoorOpen, ArrowLeft, ChevronRight, Search, X, PhoneCall, Zap } from 'lucide-react'
+import { Bell, Package, DoorOpen, ArrowLeft, ChevronRight, LogOut, Search, X, PhoneCall, Zap } from 'lucide-react'
 import { useScanInput, extractDocumentFromBarcode } from '@/hooks/use-webhid-scanner'
+import { parseColombianCedula } from '@/lib/colombian-cedula'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { z } from 'zod'
 import { SectionHeader } from '@/components/layout/section-header'
@@ -24,7 +25,7 @@ import { ImagePreviewDialog } from '@/components/ui/image-preview-dialog'
 import { api } from '@/lib/api'
 import { UPLOADS_URL } from '@/lib/constants'
 import { useAuth } from '@/hooks/use-auth-context'
-import { cn, formatDate, formatName, normalizePlate } from '@/lib/utils'
+import { cn, formatDate, formatDocument, formatName, normalizePlate } from '@/lib/utils'
 import { toast } from 'sonner'
 import { useCalls } from '@/features/calls/use-calls'
 import type { AccessAudit, Apartment, PlateLocationResult, Resident, Tower, Visitor, VisitorSearchResult } from '@/types/api'
@@ -136,10 +137,21 @@ const ACCESS_ENTRY_OPTIONS = [
   { value: 'other', label: 'Otros' },
 ] as const
 
+const ACCESS_VISITOR_CATEGORY_OPTIONS = [
+  { value: 'visita', label: 'Visita' },
+  { value: 'domiciliario', label: 'Domiciliario' },
+] as const
+
 type AccessPhase =
   | { kind: 'idle' }
   | { kind: 'not_found'; document: string }
   | { kind: 'ready'; visitor: Visitor }
+
+type ApartmentExitPhase =
+  | { kind: 'idle' }
+  | { kind: 'not_found' }
+  | { kind: 'no_open_access'; visitor: Visitor }
+  | { kind: 'ready'; visitor: Visitor; openAccess: AccessAudit }
 
 function resolveUploadPath(path?: string | null): string | null {
   if (!path) return null
@@ -506,7 +518,7 @@ function PlateLocationSearch({
 
 // ─── Apt detail dialog ────────────────────────────────────────────────────────
 
-type DialogView = 'info' | 'notify' | 'package' | 'access'
+type DialogView = 'info' | 'notify' | 'package' | 'access' | 'exit'
 type PackageResidentOption = Pick<Resident, 'id' | 'name' | 'lastName'>
 
 function AptDetailDialog({
@@ -580,6 +592,7 @@ function AptDetailDialog({
   const [accessSearchDoc, setAccessSearchDoc] = useState('')
   const [accessPlateSearch, setAccessPlateSearch] = useState('')
   const [accessEntryType, setAccessEntryType] = useState<(typeof ACCESS_ENTRY_OPTIONS)[number]['value']>('pedestrian')
+  const [accessVisitorCategory, setAccessVisitorCategory] = useState<(typeof ACCESS_VISITOR_CATEGORY_OPTIONS)[number]['value']>('visita')
   const [accessVehicleBrandId, setAccessVehicleBrandId] = useState('')
   const [accessVehicleColor, setAccessVehicleColor] = useState('')
   const [accessVehiclePlate, setAccessVehiclePlate] = useState('')
@@ -593,6 +606,9 @@ function AptDetailDialog({
   const [createVisitorSubmitting, setCreateVisitorSubmitting] = useState(false)
   const [notifySubmitting, setNotifySubmitting] = useState(false)
   const [packageSubmitting, setPackageSubmitting] = useState(false)
+  const [exitSearchDoc, setExitSearchDoc] = useState('')
+  const [exitPhase, setExitPhase] = useState<ApartmentExitPhase>({ kind: 'idle' })
+  const [exitSubmitting, setExitSubmitting] = useState(false)
   const activeAccessVisitor = accessPhase.kind === 'ready' ? accessPhase.visitor : null
 
   const accessIsCarOrMoto = accessEntryType === 'car' || accessEntryType === 'motorcycle'
@@ -666,6 +682,11 @@ function AptDetailDialog({
         const searchedDocument = accessSearchDoc.trim()
         setAccessPhase({ kind: 'not_found', document: searchedDocument })
         createVisitorForm.setValue('document', searchedDocument)
+        const cedula = parseColombianCedula(lastScannedTextRef.current)
+        if (cedula && cedula.documentNumber === searchedDocument) {
+          createVisitorForm.setValue('name', `${cedula.firstName1} ${cedula.firstName2}`.trim())
+          createVisitorForm.setValue('lastName', `${cedula.lastName1} ${cedula.lastName2}`.trim())
+        }
         applyAccessDefaults(null)
         return
       }
@@ -687,6 +708,7 @@ function AptDetailDialog({
       setAccessSearchDoc('')
       setAccessPlateSearch('')
       setAccessEntryType('pedestrian')
+      setAccessVisitorCategory('visita')
       resetAccessVehicleFields()
       setAccessNotes('')
       setAccessPhoto(null)
@@ -706,6 +728,7 @@ function AptDetailDialog({
     const lastIsCarOrMoto = entryType === 'car' || entryType === 'motorcycle'
 
     setAccessEntryType(entryType)
+    setAccessVisitorCategory(lastAccess.visitorCategory ?? 'visita')
     setAccessVehicleBrandId(lastIsCarOrMoto ? lastAccess.vehicleBrandId ?? '' : '')
     setAccessVehicleColor(hasVehicleData ? lastAccess.vehicleColor ?? '' : '')
     setAccessVehiclePlate(hasVehicleData ? lastAccess.vehiclePlate ?? '' : '')
@@ -768,6 +791,7 @@ function AptDetailDialog({
     const lastIsCarOrMoto = entryType === 'car' || entryType === 'motorcycle'
 
     setAccessEntryType(entryType)
+    setAccessVisitorCategory(searchResult?.lastAccess?.visitorCategory ?? 'visita')
     setAccessVehicleBrandId(lastIsCarOrMoto ? searchResult?.lastAccess?.vehicleBrandId ?? '' : '')
     setAccessVehicleColor(hasVehicleData ? searchResult?.lastAccess?.vehicleColor ?? '' : '')
     setAccessVehiclePlate(hasVehicleData ? searchResult?.lastAccess?.vehiclePlate ?? '' : '')
@@ -783,12 +807,32 @@ function AptDetailDialog({
     )
   }
 
+  const lastScannedTextRef = useRef('')
+
   const canScanBarcode = open && view === 'access' && (accessPhase.kind === 'idle' || accessPhase.kind === 'not_found')
   useScanInput((value: string) => {
     const doc = extractDocumentFromBarcode(value)
+    console.log('[scanner] raw value:', JSON.stringify(value))
+    console.log('[scanner] extracted document:', doc)
+    if (!doc) {
+      toast.error('Código no legible. En la cédula digital escanea el código MRZ (las 3 líneas de letras y números del reverso), no el QR.')
+      return
+    }
+    lastScannedTextRef.current = value
     setAccessSearchDoc(doc)
     searchVisitorMutation.mutate(doc)
   }, canScanBarcode)
+
+  const canScanExit = open && view === 'exit' && exitPhase.kind !== 'ready'
+  useScanInput((value: string) => {
+    const doc = extractDocumentFromBarcode(value)
+    if (!doc) {
+      toast.error('Código no legible. En la cédula digital escanea el código MRZ (las 3 líneas de letras y números del reverso), no el QR.')
+      return
+    }
+    setExitSearchDoc(doc)
+    searchOpenAccessMutation.mutate(doc)
+  }, canScanExit)
 
   function handleQuickEntry(entry: {
     visitor: Visitor
@@ -804,6 +848,7 @@ function AptDetailDialog({
     const hasVehicle = entry.entryType === 'car' || entry.entryType === 'motorcycle' || entry.entryType === 'taxi'
     const isCarOrMoto = entry.entryType === 'car' || entry.entryType === 'motorcycle'
     setAccessEntryType(entry.entryType as typeof accessEntryType)
+    setAccessVisitorCategory('visita')
     setAccessVehiclePlate(hasVehicle && entry.vehiclePlate ? entry.vehiclePlate : '')
     if (isCarOrMoto) {
       setAccessVehicleBrandId(entry.vehicleBrandId ?? '')
@@ -831,6 +876,53 @@ function AptDetailDialog({
     plateSearchMutation.mutate(normalizedPlate)
   }
 
+  const searchOpenAccessMutation = useMutation({
+    mutationFn: api.searchOpenAccessByDocument,
+    onSuccess: (result) => {
+      if (!result.visitor) {
+        setExitPhase({ kind: 'not_found' })
+        return
+      }
+      if (!result.openAccess) {
+        setExitPhase({ kind: 'no_open_access', visitor: result.visitor })
+        return
+      }
+      setExitPhase({ kind: 'ready', visitor: result.visitor, openAccess: result.openAccess })
+    },
+    onError: () => toast.error('No fue posible consultar el visitante'),
+  })
+
+  const registerExitMutation = useMutation({
+    mutationFn: (id: string) => api.registerExit(id),
+    onSuccess: () => {
+      toast.success('Salida registrada')
+      resetExitState()
+      void queryClient.invalidateQueries({ queryKey: ['access-audit'] })
+      void queryClient.invalidateQueries({ queryKey: ['access-audit-stats'] })
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'No fue posible registrar la salida')),
+    onSettled: () => setExitSubmitting(false),
+  })
+
+  function resetExitState() {
+    setExitSearchDoc('')
+    setExitPhase({ kind: 'idle' })
+    setExitSubmitting(false)
+  }
+
+  function handleExitSearch() {
+    const normalizedDocument = exitSearchDoc.trim()
+    if (!normalizedDocument) return
+    searchOpenAccessMutation.mutate(normalizedDocument)
+  }
+
+  function handleConfirmExit() {
+    if (exitPhase.kind !== 'ready') return
+    if (exitSubmitting) return
+    setExitSubmitting(true)
+    registerExitMutation.mutate(exitPhase.openAccess.id)
+  }
+
   function handleRegisterAccess(visitorId: string) {
     if (accessSubmitting) return
     setAccessSubmitting(true)
@@ -853,6 +945,7 @@ function AptDetailDialog({
       visitorId,
       apartmentId: apartment.id,
       entryType: accessEntryType,
+      visitorCategory: accessVisitorCategory,
       ...(accessPhoto ? {} : { visitorPhotoPath: existingPhoto ?? undefined }),
       ...(accessNotes.trim() ? { notes: accessNotes.trim() } : {}),
     }
@@ -943,6 +1036,7 @@ function AptDetailDialog({
     setAccessSearchDoc('')
     setAccessPlateSearch('')
     setAccessEntryType('pedestrian')
+    setAccessVisitorCategory('visita')
     resetAccessVehicleFields()
     setAccessNotes('')
     setAccessPhoto(null)
@@ -951,6 +1045,7 @@ function AptDetailDialog({
     setCreateVisitorSubmitting(false)
     setNotifySubmitting(false)
     setPackageSubmitting(false)
+    resetExitState()
     pkgForm.reset()
     setPackagePhotos([])
     setPackageResidentOpen(false)
@@ -999,10 +1094,12 @@ function AptDetailDialog({
                 setAccessSearchDoc('')
                 setAccessPlateSearch('')
                 setAccessEntryType('pedestrian')
+                setAccessVisitorCategory('visita')
                 resetAccessVehicleFields()
                 setAccessNotes('')
                 setAccessPhoto(null)
                 setAccessHistoryPhotoPath(null)
+                resetExitState()
               }}
               className="mb-2 flex items-center gap-1 text-xs text-white/70 hover:text-white transition"
             >
@@ -1033,141 +1130,6 @@ function AptDetailDialog({
           {/* ── Info view ── */}
           {view === 'info' && (
             <div className="space-y-5">
-              {/* Residents */}
-              {residentsQuery.isLoading ? (
-                <p className="text-sm text-slate-400">Cargando residentes...</p>
-              ) : residents.length > 0 ? (
-                <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
-                    Residentes
-                  </p>
-                  <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
-                    {residents.map((r) => (
-                      <div key={r.id} className="flex items-center gap-3 px-3 py-2.5">
-                        <span className={cn('size-2 rounded-full shrink-0', color.dot)} />
-                        <span className="text-sm text-slate-800 font-medium">
-                          {formatName(r.name, r.lastName)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 py-4 text-center">
-                  <p className="text-xs text-slate-400">Sin residentes asignados</p>
-                </div>
-              )}
-
-              {/* Vehicles */}
-              {vehicles.length > 0 && (
-                <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
-                    Vehículos
-                  </p>
-                  <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
-                    {vehicles.map((v) => {
-                      const vehicleEmoji = v.vehicleType === 'motorcycle' ? '🏍' : v.vehicleType === 'bicycle' ? '🚲' : '🚗'
-                      const entryType = v.vehicleType === 'motorcycle' ? 'motorcycle' : 'car'
-                      const residentVisitor = residents[0]
-                      return (
-                        <div key={v.id} className="flex items-center gap-3 px-3 py-2">
-                          <span className="text-sm text-slate-400">{vehicleEmoji}</span>
-                          <div className="min-w-0 flex-1">
-                            <p className="font-mono text-sm font-bold text-slate-800">{v.plate}</p>
-                            <p className="text-xs text-slate-400">
-                              {v.vehicleBrand?.name ?? '—'}{v.color ? ` · ${v.color}` : ''}
-                            </p>
-                          </div>
-                          {canManageAccess && residentVisitor && (
-                            <button
-                              type="button"
-                              title="Ingreso rápido"
-                              onClick={() => {
-                                setView('access')
-                                setAccessEntryType(entryType as typeof accessEntryType)
-                                setAccessVehiclePlate(v.plate)
-                                setAccessVehicleBrandId(v.vehicleBrandId ?? '')
-                                setAccessVehicleColor(v.color ?? '')
-                                setAccessVehicleModel(v.model ?? '')
-                                setAccessPhoto(null)
-                                setAccessHistoryPhotoPath(null)
-                                setAccessNotes('')
-                                setAccessPhase({ kind: 'idle' })
-                                setAccessSearchDoc('')
-                              }}
-                              className="shrink-0 rounded-md p-1.5 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 transition"
-                            >
-                              <Zap className="size-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Frequent visitors */}
-              {frequentVisitors.length > 0 && (
-                <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
-                    Visitantes frecuentes
-                  </p>
-                  <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
-                    {frequentVisitors.map((entry, idx) => {
-                      const entryLabels: Record<string, string> = {
-                        pedestrian: 'A pie', car: 'Carro', motorcycle: 'Moto', taxi: 'Taxi', other: 'Otro',
-                      }
-                      const entryLabel = entryLabels[entry.entryType ?? 'pedestrian'] ?? 'A pie'
-                      const isVehicle = entry.entryType === 'car' || entry.entryType === 'motorcycle' || entry.entryType === 'taxi'
-                      return (
-                        <div key={`${entry.visitorId}-${entry.vehiclePlate ?? 'none'}-${idx}`} className="flex items-center gap-2 px-3 py-2">
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium text-slate-800">
-                              {formatName(entry.visitor.name, entry.visitor.lastName)}
-                            </p>
-                            <p className="text-xs text-slate-400">
-                              {entryLabel}
-                              {isVehicle && entry.vehiclePlate ? ` · ${normalizePlate(entry.vehiclePlate)}` : ''}
-                              {' · '}
-                              {entry.visits}x
-                            </p>
-                          </div>
-                          {canManageAccess && (
-                            <button
-                              type="button"
-                              title="Ingreso rápido"
-                              onClick={() => handleQuickEntry(entry)}
-                              className="shrink-0 rounded-md p-1.5 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 transition"
-                            >
-                              <Zap className="size-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Pending indicators */}
-              {(pendingPkgs > 0 || unreadNotifs > 0) && (
-                <div className="flex gap-2">
-                  {pendingPkgs > 0 && (
-                    <div className="flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700">
-                      <Package className="size-3.5 text-amber-500" />
-                      {pendingPkgs} sin entregar
-                    </div>
-                  )}
-                  {unreadNotifs > 0 && (
-                    <div className="flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700">
-                      <Bell className="size-3.5 text-blue-500" />
-                      {unreadNotifs} sin leer
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* Actions */}
               <div>
                 <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
@@ -1186,6 +1148,23 @@ function AptDetailDialog({
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-slate-800">Registrar visitante</p>
                         <p className="text-xs text-slate-400 mt-0.5">Marcar ingreso de visita</p>
+                      </div>
+                      <ChevronRight className="size-4 text-slate-300 shrink-0" />
+                    </button>
+                  )}
+
+                  {canManageAccess && (
+                    <button
+                      type="button"
+                      onClick={() => setView('exit')}
+                      className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:bg-slate-100"
+                    >
+                      <div className="flex size-9 items-center justify-center rounded-lg border border-slate-200 bg-white">
+                        <LogOut className="size-4 text-slate-500" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-slate-800">Registrar salida</p>
+                        <p className="text-xs text-slate-400 mt-0.5">Cerrar un ingreso abierto</p>
                       </div>
                       <ChevronRight className="size-4 text-slate-300 shrink-0" />
                     </button>
@@ -1258,6 +1237,142 @@ function AptDetailDialog({
 
                 </div>
               </div>
+
+              {/* Residents */}
+              {residentsQuery.isLoading ? (
+                <p className="text-sm text-slate-400">Cargando residentes...</p>
+              ) : residents.length > 0 ? (
+                <div>
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+                    Residentes
+                  </p>
+                  <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
+                    {residents.map((r) => (
+                      <div key={r.id} className="flex items-center gap-3 px-3 py-2.5">
+                        <span className={cn('size-2 rounded-full shrink-0', color.dot)} />
+                        <span className="text-sm text-slate-800 font-medium">
+                          {formatName(r.name, r.lastName)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 py-4 text-center">
+                  <p className="text-xs text-slate-400">Sin residentes asignados</p>
+                </div>
+              )}
+
+              {/* Frequent visitors */}
+              {frequentVisitors.length > 0 && (
+                <div>
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+                    Visitantes frecuentes
+                  </p>
+                  <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
+                    {frequentVisitors.map((entry, idx) => {
+                      const entryLabels: Record<string, string> = {
+                        pedestrian: 'A pie', car: 'Carro', motorcycle: 'Moto', taxi: 'Taxi', other: 'Otro',
+                      }
+                      const entryLabel = entryLabels[entry.entryType ?? 'pedestrian'] ?? 'A pie'
+                      const isVehicle = entry.entryType === 'car' || entry.entryType === 'motorcycle' || entry.entryType === 'taxi'
+                      return (
+                        <div key={`${entry.visitorId}-${entry.vehiclePlate ?? 'none'}-${idx}`} className="flex items-center gap-2 px-3 py-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-slate-800">
+                              {formatName(entry.visitor.name, entry.visitor.lastName)}
+                            </p>
+                            <p className="text-xs text-slate-400">
+                              {entryLabel}
+                              {isVehicle && entry.vehiclePlate ? ` · ${normalizePlate(entry.vehiclePlate)}` : ''}
+                              {' · '}
+                              {entry.visits}x
+                            </p>
+                          </div>
+                          {canManageAccess && (
+                            <button
+                              type="button"
+                              title="Ingreso rápido"
+                              onClick={() => handleQuickEntry(entry)}
+                              className="shrink-0 rounded-md p-1.5 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 transition"
+                            >
+                              <Zap className="size-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Vehicles */}
+              {vehicles.length > 0 && (
+                <div>
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+                    Vehículos
+                  </p>
+                  <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden">
+                    {vehicles.map((v) => {
+                      const vehicleEmoji = v.vehicleType === 'motorcycle' ? '🏍' : v.vehicleType === 'bicycle' ? '🚲' : '🚗'
+                      const entryType = v.vehicleType === 'motorcycle' ? 'motorcycle' : 'car'
+                      const residentVisitor = residents[0]
+                      return (
+                        <div key={v.id} className="flex items-center gap-3 px-3 py-2">
+                          <span className="text-sm text-slate-400">{vehicleEmoji}</span>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-mono text-sm font-bold text-slate-800">{v.plate}</p>
+                            <p className="text-xs text-slate-400">
+                              {v.vehicleBrand?.name ?? '—'}{v.color ? ` · ${v.color}` : ''}
+                            </p>
+                          </div>
+                          {canManageAccess && residentVisitor && (
+                            <button
+                              type="button"
+                              title="Ingreso rápido"
+                              onClick={() => {
+                                setView('access')
+                                setAccessEntryType(entryType as typeof accessEntryType)
+                                setAccessVisitorCategory('visita')
+                                setAccessVehiclePlate(v.plate)
+                                setAccessVehicleBrandId(v.vehicleBrandId ?? '')
+                                setAccessVehicleColor(v.color ?? '')
+                                setAccessVehicleModel(v.model ?? '')
+                                setAccessPhoto(null)
+                                setAccessHistoryPhotoPath(null)
+                                setAccessNotes('')
+                                setAccessPhase({ kind: 'idle' })
+                                setAccessSearchDoc('')
+                              }}
+                              className="shrink-0 rounded-md p-1.5 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 transition"
+                            >
+                              <Zap className="size-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Pending indicators */}
+              {(pendingPkgs > 0 || unreadNotifs > 0) && (
+                <div className="flex gap-2">
+                  {pendingPkgs > 0 && (
+                    <div className="flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700">
+                      <Package className="size-3.5 text-amber-500" />
+                      {pendingPkgs} sin entregar
+                    </div>
+                  )}
+                  {unreadNotifs > 0 && (
+                    <div className="flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700">
+                      <Bell className="size-3.5 text-blue-500" />
+                      {unreadNotifs} sin leer
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1467,6 +1582,27 @@ function AptDetailDialog({
 	                  )}
 
                   <fieldset disabled={accessPhase.kind !== 'ready'} className="space-y-3 disabled:opacity-60">
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Categoría">
+                      <Select
+                        value={accessVisitorCategory}
+                        onValueChange={(value) =>
+                          setAccessVisitorCategory(value as (typeof ACCESS_VISITOR_CATEGORY_OPTIONS)[number]['value'])
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecciona categoría" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ACCESS_VISITOR_CATEGORY_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+
                     <Field label="Tipo de entrada">
                       <Select
                         value={accessEntryType}
@@ -1486,6 +1622,7 @@ function AptDetailDialog({
                         </SelectContent>
                       </Select>
                     </Field>
+                  </div>
 
                   {accessShowVehicleSection && (
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -1586,6 +1723,83 @@ function AptDetailDialog({
                   </fieldset>
 	                </div>
 	              )}
+            </div>
+          )}
+
+          {/* ── Exit view ── */}
+          {view === 'exit' && (
+            <div className="space-y-4">
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                Buscar visitante
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Número de cédula o documento"
+                  value={exitSearchDoc}
+                  onChange={(e) => {
+                    setExitSearchDoc(e.target.value)
+                    if (exitPhase.kind !== 'idle') setExitPhase({ kind: 'idle' })
+                  }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleExitSearch()}
+                  disabled={searchOpenAccessMutation.isPending}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleExitSearch}
+                  disabled={!exitSearchDoc.trim() || searchOpenAccessMutation.isPending}
+                >
+                  <Search className="size-4" />
+                </Button>
+              </div>
+
+              {exitPhase.kind === 'not_found' && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  No existe un visitante con ese documento.
+                </div>
+              )}
+
+              {exitPhase.kind === 'no_open_access' && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-slate-600">
+                  <strong>{formatName(exitPhase.visitor.name, exitPhase.visitor.lastName)}</strong> no tiene un ingreso abierto para registrar salida.
+                </div>
+              )}
+
+              {exitPhase.kind === 'ready' && (
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-emerald-600">Ingreso abierto</p>
+                    <p className="mt-1 font-semibold text-slate-900">
+                      {formatName(exitPhase.visitor.name, exitPhase.visitor.lastName)}
+                    </p>
+                    {exitPhase.visitor.document && (
+                      <p className="text-sm text-slate-500">CC {formatDocument(exitPhase.visitor.document)}</p>
+                    )}
+                    {exitPhase.openAccess.apartment && (
+                      <p className="text-sm text-slate-500">
+                        {exitPhase.openAccess.apartment.tower ? `Torre ${exitPhase.openAccess.apartment.tower} · ` : ''}
+                        Apt. {exitPhase.openAccess.apartment.number}
+                      </p>
+                    )}
+                    <p className="text-sm text-slate-500">Entrada: {formatDate(exitPhase.openAccess.entryTime)}</p>
+                    <p className="text-sm text-slate-500">
+                      {ACCESS_VISITOR_CATEGORY_OPTIONS.find((o) => o.value === exitPhase.openAccess.visitorCategory)?.label ?? 'Visita'}
+                      {' · '}
+                      {ACCESS_ENTRY_OPTIONS.find((o) => o.value === exitPhase.openAccess.entryType)?.label ?? 'A pie'}
+                    </p>
+                  </div>
+
+                  <Button
+                    type="button"
+                    className="w-full"
+                    onClick={handleConfirmExit}
+                    disabled={exitSubmitting || registerExitMutation.isPending}
+                  >
+                    <LogOut className="mr-2 size-4" />
+                    Confirmar salida
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 

@@ -642,22 +642,24 @@ export function RegistrationsPage() {
         description="Revisión de solicitudes enviadas por futuros residentes"
       />
 
-      <div className="flex gap-2">
-        {STATUS_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => setStatusFilter(opt.value)}
-            className={cn(
-              'rounded-full px-3 py-1 text-xs font-medium transition',
-              statusFilter === opt.value
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
-            )}
-          >
-            {opt.label}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex gap-2">
+          {STATUS_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setStatusFilter(opt.value)}
+              className={cn(
+                'rounded-full px-3 py-1 text-xs font-medium transition',
+                statusFilter === opt.value
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <DataTable columns={columns} data={requests} isLoading={isLoading} />

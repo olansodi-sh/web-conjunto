@@ -20,6 +20,7 @@ export function useBarcodeScanner(minLength = 4, maxGapMs = 100) {
         const scanned = bufferRef.current.join('')
         bufferRef.current = []
         if (scanned.length >= minLength) {
+          console.log('[scanner:keyboard-wedge] raw value:', JSON.stringify(scanned))
           window.dispatchEvent(new CustomEvent(SCANNER_EVENT, { detail: { value: scanned } }))
         }
         return
