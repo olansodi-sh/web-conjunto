@@ -13,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { DataTable, type ColumnDef } from '@/components/ui/data-table'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { api } from '@/lib/api'
-import { formatDate } from '@/lib/utils'
+import { formatDate, formatTime } from '@/lib/utils'
 import { useAuth } from '@/hooks/use-auth-context'
 import { toast } from 'sonner'
 import type { CommunitySpace, CommunitySpaceSchedule } from '@/types/api'
@@ -79,7 +79,7 @@ function formatSchedulesSummary(schedules?: CommunitySpaceSchedule[]) {
   }
 
   return open
-    .map((row) => `${DAY_LABELS[row.dayOfWeek].slice(0, 3)} ${row.startTime?.slice(0, 5)}-${row.endTime?.slice(0, 5)}`)
+    .map((row) => `${DAY_LABELS[row.dayOfWeek].slice(0, 3)} ${formatTime(row.startTime)}-${formatTime(row.endTime)}`)
     .join(' · ')
 }
 

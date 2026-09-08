@@ -9,7 +9,7 @@ import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/use-auth-context'
-import { cn, formatDate, formatName } from '@/lib/utils'
+import { cn, formatDate, formatName, formatTime, todayKey } from '@/lib/utils'
 import { toast } from 'sonner'
 import type { Reservation } from '@/types/api'
 
@@ -85,11 +85,6 @@ function dayKey(value?: string | null): string {
   return (value ?? '').slice(0, 10)
 }
 
-/** "09:00:00" → "09:00" */
-function shortTime(value?: string | null): string {
-  return (value ?? '').slice(0, 5)
-}
-
 function statusChipClasses(code?: string): string {
   switch (code) {
     case 'approved':
@@ -129,7 +124,7 @@ function ReservationDetailDialog({
               <dt className="text-slate-400">Día reservado</dt>
               <dd className="text-slate-700">{formatDate(reservation.reservationDate)}</dd>
               <dt className="text-slate-400">Horario</dt>
-              <dd className="text-slate-700">{shortTime(reservation.startTime)} – {shortTime(reservation.endTime)}</dd>
+              <dd className="text-slate-700">{formatTime(reservation.startTime)} – {formatTime(reservation.endTime)}</dd>
               <dt className="text-slate-400">Estado</dt>
               <dd>
                 <StatusBadge
@@ -193,7 +188,8 @@ function ReservationsCalendar({ reservations }: { reservations: Reservation[] })
   }, [cursor])
 
   const pad = (n: number) => String(n).padStart(2, '0')
-  const todayKey = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+  // El dia de "hoy" se resuelve en GMT-5, no en la zona del equipo.
+  const todayIso = todayKey()
 
   const goPrev = () =>
     setCursor((c) => (c.month === 0 ? { year: c.year - 1, month: 11 } : { ...c, month: c.month - 1 }))
@@ -234,7 +230,7 @@ function ReservationsCalendar({ reservations }: { reservations: Reservation[] })
           if (day === null) return <div key={`e-${idx}`} className="min-h-24 bg-slate-50/60" />
           const key = `${cursor.year}-${pad(cursor.month + 1)}-${pad(day)}`
           const items = byDay.get(key) ?? []
-          const isToday = key === todayKey
+          const isToday = key === todayIso
           return (
             <div key={key} className="min-h-24 bg-white p-1.5">
               <div
@@ -255,9 +251,9 @@ function ReservationsCalendar({ reservations }: { reservations: Reservation[] })
                       'block w-full truncate rounded border px-1.5 py-1 text-left text-[11px] font-medium transition',
                       statusChipClasses(r.status?.code),
                     )}
-                    title={`${shortTime(r.startTime)}–${shortTime(r.endTime)} · ${r.area?.name ?? 'Área'}`}
+                    title={`${formatTime(r.startTime)}–${formatTime(r.endTime)} · ${r.area?.name ?? 'Área'}`}
                   >
-                    {shortTime(r.startTime)} {r.area?.name ?? 'Área'}
+                    {formatTime(r.startTime)} {r.area?.name ?? 'Área'}
                   </button>
                 ))}
               </div>
@@ -345,7 +341,7 @@ export function ReservationsPage() {
       header: 'Horario',
       cell: (row) => (
         <span className="whitespace-nowrap text-slate-500 text-xs">
-          {row.startTime} – {row.endTime}
+          {formatTime(row.startTime)} – {formatTime(row.endTime)}
         </span>
       ),
     },

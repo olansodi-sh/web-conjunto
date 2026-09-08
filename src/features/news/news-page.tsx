@@ -28,7 +28,7 @@ import {
 import { DataTable, type ColumnDef } from '@/components/ui/data-table'
 import { ImageCaptureControl } from '@/components/ui/image-capture-control'
 import { api } from '@/lib/api'
-import { formatDate } from '@/lib/utils'
+import { formatDate, fromDateTimeLocalValue, toDateTimeLocalValue, toDayKey, todayKey } from '@/lib/utils'
 import { toast } from 'sonner'
 import type { NewsItem } from '@/types/api'
 import { useAuth } from '@/hooks/use-auth-context'
@@ -86,7 +86,7 @@ export function NewsPage() {
     defaultValues: {
       title: '',
       content: '',
-      publishedAt: new Date().toISOString().slice(0, 16),
+      publishedAt: toDateTimeLocalValue(),
       categoryId: '',
     },
   })
@@ -102,7 +102,7 @@ export function NewsPage() {
       const created = await api.createNews({
         title: values.title,
         content: values.content,
-        publishedAt: new Date(values.publishedAt).toISOString(),
+        publishedAt: fromDateTimeLocalValue(values.publishedAt),
         categoryId: values.categoryId,
       })
       if (pendingImage) {
@@ -112,7 +112,7 @@ export function NewsPage() {
     },
     onSuccess: () => {
       toast.success('Noticia creada')
-      form.reset({ title: '', content: '', publishedAt: new Date().toISOString().slice(0, 16), categoryId: '' })
+      form.reset({ title: '', content: '', publishedAt: toDateTimeLocalValue(), categoryId: '' })
       setPendingImage(null)
       setImagePreview(null)
       setOpen(false)
@@ -151,7 +151,7 @@ export function NewsPage() {
   function handleClose(v: boolean) {
     setOpen(v)
     if (!v) {
-      form.reset({ title: '', content: '', publishedAt: new Date().toISOString().slice(0, 16), categoryId: '' })
+      form.reset({ title: '', content: '', publishedAt: toDateTimeLocalValue(), categoryId: '' })
       setPendingImage(null)
       setImagePreview(null)
     }
@@ -215,7 +215,7 @@ export function NewsPage() {
   ]
 
   const thisMonth = news.filter(
-    (n) => new Date(n.publishedAt).getMonth() === new Date().getMonth(),
+    (n) => toDayKey(n.publishedAt).slice(0, 7) === todayKey().slice(0, 7),
   ).length
 
   return (

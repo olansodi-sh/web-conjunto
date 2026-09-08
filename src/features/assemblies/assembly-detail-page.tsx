@@ -32,6 +32,7 @@ import {
 import { useAssemblySocket } from './hooks/use-assembly-socket'
 import { AssemblyLivePanel } from './assembly-live-panel'
 import type { AssemblyQuestion } from './types'
+import { todayKey } from '@/lib/utils'
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Borrador',
@@ -80,7 +81,7 @@ export function AssemblyDetailPage() {
 
   if (!assembly) return null
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayKey()
   const canStart = assembly.scheduledDate <= today && assembly.status === 'draft'
   const webBase =
     typeof window !== 'undefined'

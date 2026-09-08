@@ -5,10 +5,10 @@ import { KpiCard } from '@/components/dashboard/kpi-card'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { api } from '@/lib/api'
-import { formatName } from '@/lib/utils'
+import { formatName, todayKey } from '@/lib/utils'
 
 export function PoolDashboardPage() {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayKey()
 
   const entriesQuery = useQuery({
     queryKey: ['pool-entries'],

@@ -8,6 +8,7 @@ import { Field } from '@/components/forms/field'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
 import { toast } from 'sonner'
+import { toDayKey } from '@/lib/utils'
 
 const PRESETS = [
   { label: 'Esta semana', days: 7 },
@@ -16,7 +17,7 @@ const PRESETS = [
 ]
 
 function toIsoDate(date: Date) {
-  return date.toISOString().slice(0, 10)
+  return toDayKey(date)
 }
 
 function daysAgo(n: number) {

@@ -15,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { DataTable, type ColumnDef, type FilterDef } from '@/components/ui/data-table'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { api } from '@/lib/api'
-import { formatDate, formatDocument, formatName } from '@/lib/utils'
+import { formatDate, formatDocument, formatName, todayKey } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import type { PoolEntry, Resident } from '@/types/api'
@@ -363,7 +363,7 @@ export function PoolControlPage() {
   const entries = entriesQuery.data?.data ?? []
   const towers = towersQuery.data ?? []
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayKey()
   const todayCount = entries.filter((e) => e.entryTime.slice(0, 10) === today).length
   const totalGuests = entries.reduce((sum, e) => sum + (e.guestCount ?? 0), 0)
 

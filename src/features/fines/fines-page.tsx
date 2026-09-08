@@ -14,7 +14,7 @@ import { FilterableSelect } from '@/components/ui/filterable-select'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
-import { cn, formatDate, formatName } from '@/lib/utils'
+import { cn, formatDate, formatName, toDayKey } from '@/lib/utils'
 import { useAuth } from '@/hooks/use-auth-context'
 import { toast } from 'sonner'
 import type { Apartment, Employee, Fine, FineType, Resident, Tower } from '@/types/api'
@@ -56,7 +56,7 @@ const ALL_TABS = [
 ]
 
 function toIsoDate(date: Date) {
-  return date.toISOString().slice(0, 10)
+  return toDayKey(date)
 }
 
 function daysAgo(days: number) {

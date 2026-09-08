@@ -29,7 +29,7 @@ import { KpiCard } from '@/components/dashboard/kpi-card'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/use-auth-context'
-import { formatDate, formatName } from '@/lib/utils'
+import { formatDate, formatName, getHourOfDay, toDayKey, todayKey } from '@/lib/utils'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -37,7 +37,7 @@ function last7Days() {
   return Array.from({ length: 7 }, (_, i) => {
     const d = new Date()
     d.setDate(d.getDate() - (6 - i))
-    return d.toISOString().slice(0, 10)
+    return toDayKey(d)
   })
 }
 
@@ -101,7 +101,7 @@ export function OverviewPage() {
 function AdminOverview() {
   const { user } = useAuth()
 
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const sevenDaysAgo = toDayKey(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
 
   const results = useQueries({
     queries: [
@@ -123,17 +123,17 @@ function AdminOverview() {
   const accesses       = results[5].data?.data ?? []
   const poolEntries    = results[6].data?.data ?? []
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayKey()
 
   const pendingReservations = reservations.filter((r) => r.status?.code === 'pending')
   const pendingPackages     = packages  // already filtered: delivered=false
   const unreadNotif         = notifications  // already filtered: isRead=false
-  const accessesToday       = accesses.filter((a) => a.entryTime?.slice(0, 10) === today)
-  const poolToday           = poolEntries.filter((e) => e.entryTime?.slice(0, 10) === today)
+  const accessesToday       = accesses.filter((a) => toDayKey(a.entryTime) === today)
+  const poolToday           = poolEntries.filter((e) => toDayKey(e.entryTime) === today)
 
   // Chart data
-  const accessByDay = groupByDay(accesses.map((a) => ({ date: a.entryTime?.slice(0, 10) ?? '' })))
-  const poolByDay   = groupByDay(poolEntries.map((e) => ({ date: e.entryTime?.slice(0, 10) ?? '' })))
+  const accessByDay = groupByDay(accesses.map((a) => ({ date: toDayKey(a.entryTime) })))
+  const poolByDay   = groupByDay(poolEntries.map((e) => ({ date: toDayKey(e.entryTime) })))
 
   const reservationsByStatus = [
     { name: 'Pendientes', value: reservations.filter((r) => r.status?.code === 'pending').length, color: '#f59e0b' },
@@ -328,7 +328,7 @@ function AdminOverview() {
 function PorterOverview() {
   const { user } = useAuth()
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayKey()
 
   const results = useQueries({
     queries: [
@@ -343,9 +343,9 @@ function PorterOverview() {
   const visitors      = (results[2].data ?? []) as import('@/types/api').Visitor[]
 
   const pendingPackages = packages.filter((p) => !p.delivered)
-  const deliveredToday  = packages.filter((p) => p.delivered && p.deliveredTime?.slice(0, 10) === today)
+  const deliveredToday  = packages.filter((p) => p.delivered && toDayKey(p.deliveredTime) === today)
   const todayEntries    = accessEntries  // already filtered by dateFrom=today
-  const visitorsToday   = visitors.filter((v) => v.createdAt?.slice(0, 10) === today)
+  const visitorsToday   = visitors.filter((v) => toDayKey(v.createdAt) === today)
 
   const recentAccesses = [...accessEntries]
     .sort((a, b) => new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime())
@@ -354,13 +354,13 @@ function PorterOverview() {
   // Accesses by hour today
   const accessByHour = Array.from({ length: 24 }, (_, h) => ({
     hour: `${h}h`,
-    count: todayEntries.filter((a) => new Date(a.entryTime).getHours() === h).length,
+    count: todayEntries.filter((a) => getHourOfDay(a.entryTime) === h).length,
   })).filter((_, i) => {
-    const now = new Date().getHours()
+    const now = getHourOfDay(new Date())
     return i <= now
   })
 
-  const accessByDay = groupByDay(accessEntries.map((a) => ({ date: a.entryTime?.slice(0, 10) ?? '' })))
+  const accessByDay = groupByDay(accessEntries.map((a) => ({ date: toDayKey(a.entryTime) })))
 
   return (
     <div className="h-full overflow-y-auto">
@@ -496,7 +496,7 @@ function PorterOverview() {
 
 function PoolOverview() {
   const { user } = useAuth()
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayKey()
 
   const entriesQuery = useQuery({ queryKey: ['pool-entries', today], queryFn: () => api.getPoolEntries({ limit: 300 }) })
   const summaryQuery = useQuery({
@@ -506,7 +506,7 @@ function PoolOverview() {
 
   const allEntries  = entriesQuery.data?.data ?? []
   const todayEntries = allEntries
-    .filter((e) => e.entryTime?.slice(0, 10) === today)
+    .filter((e) => toDayKey(e.entryTime) === today)
     .sort((a, b) => new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime())
 
   const topResidents = getTopResidents(todayEntries)
@@ -515,7 +515,7 @@ function PoolOverview() {
   const guestsByDay = (() => {
     const days = last7Days()
     return days.map((d) => {
-      const dayEntries = allEntries.filter((e) => e.entryTime?.slice(0, 10) === d)
+      const dayEntries = allEntries.filter((e) => toDayKey(e.entryTime) === d)
       const guests = dayEntries.reduce((s, e) => s + (e.guestCount ?? 0), 0)
       const residents = dayEntries.length
       return { day: dayLabel(d), residentes: residents, invitados: guests }
