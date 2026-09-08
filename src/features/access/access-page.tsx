@@ -455,6 +455,10 @@ function RegisterEntryDialog() {
   const canScan = open && (phase.kind === 'idle' || phase.kind === 'not_found')
   useScanInput(useCallback((value: string) => {
     const doc = extractDocumentFromBarcode(value)
+    if (!doc) {
+      toast.error('Código no legible. En la cédula digital escanea el código MRZ (las 3 líneas de letras y números del reverso), no el QR.')
+      return
+    }
     lastScannedTextRef.current = value
     setSearchDoc(doc)
     searchVisitorMutation.mutate(doc)
@@ -863,6 +867,10 @@ function RegisterExitDialog() {
   const canScan = open && phase.kind !== 'ready'
   useScanInput(useCallback((value: string) => {
     const doc = extractDocumentFromBarcode(value)
+    if (!doc) {
+      toast.error('Código no legible. En la cédula digital escanea el código MRZ (las 3 líneas de letras y números del reverso), no el QR.')
+      return
+    }
     setSearchDoc(doc)
     searchMutation.mutate(doc)
   }, [searchMutation]), canScan)

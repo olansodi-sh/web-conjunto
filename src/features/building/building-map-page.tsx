@@ -814,6 +814,10 @@ function AptDetailDialog({
     const doc = extractDocumentFromBarcode(value)
     console.log('[scanner] raw value:', JSON.stringify(value))
     console.log('[scanner] extracted document:', doc)
+    if (!doc) {
+      toast.error('Código no legible. En la cédula digital escanea el código MRZ (las 3 líneas de letras y números del reverso), no el QR.')
+      return
+    }
     lastScannedTextRef.current = value
     setAccessSearchDoc(doc)
     searchVisitorMutation.mutate(doc)
@@ -822,6 +826,10 @@ function AptDetailDialog({
   const canScanExit = open && view === 'exit' && exitPhase.kind !== 'ready'
   useScanInput((value: string) => {
     const doc = extractDocumentFromBarcode(value)
+    if (!doc) {
+      toast.error('Código no legible. En la cédula digital escanea el código MRZ (las 3 líneas de letras y números del reverso), no el QR.')
+      return
+    }
     setExitSearchDoc(doc)
     searchOpenAccessMutation.mutate(doc)
   }, canScanExit)

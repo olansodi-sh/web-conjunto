@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { extractCedulaDocumentNumber } from '@/lib/colombian-cedula'
+import { extractCedulaDocumentNumber, parseColombianMrz } from '@/lib/colombian-cedula'
 
 const ZEBRA_VENDOR_ID = 0x05e0
 const ZEBRA_PRODUCT_ID = 0x1300
@@ -165,17 +165,33 @@ export function useWebHidScanner() {
 
 /**
  * Extracts the most likely document/ID number from raw barcode data.
- * Tries the Colombian cedula PDF417 layout first (see colombian-cedula.ts),
- * then falls back to generic heuristics for other symbologies (1D Code128,
- * cedula de extranjeria, passports, etc).
+ * Tries the Colombian cedula formats first (PDF417 for the old card, MRZ for
+ * the new "cedula digital" — see colombian-cedula.ts), then falls back to
+ * generic heuristics for other symbologies (1D Code128, cedula de
+ * extranjeria, passports, etc).
+ *
+ * Returns '' when the payload is unreadable binary — notably the QR on the
+ * back of the cedula digital, whose ~870 bytes are an encrypted/signed
+ * Registraduria blob with no plaintext fields; pulling a digit run out of it
+ * yields a bogus document number, so callers must skip empty results.
  */
 export function extractDocumentFromBarcode(raw: string): string {
   const trimmed = raw.trim()
   // Already clean: only alphanumeric chars (typical 1D Code128 scan)
   if (/^[A-Za-z0-9]{4,}$/.test(trimmed)) return trimmed
 
+  // New cedula digital: MRZ (TD1) on the back
+  const mrz = parseColombianMrz(trimmed)
+  if (mrz) return mrz.documentNumber
+
   const cedulaDocument = extractCedulaDocumentNumber(trimmed)
   if (cedulaDocument) return cedulaDocument
+
+  // Binary payloads survive sanitization as symbol soup; if most of the text
+  // is not alphanumeric, refuse instead of letting the digit-run fallback
+  // fabricate a document number.
+  const alnumCount = (trimmed.match(/[A-Za-z0-9 ]/g) ?? []).length
+  if (trimmed.length > 0 && alnumCount / trimmed.length < 0.7) return ''
 
   // Prefer longest all-digit sequence (Colombian CC = 6-10 digits)
   const digitRuns = [...trimmed.matchAll(/\d{5,15}/g)].map((m) => m[0])
