@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { AlertCircle, Bell, Building2, Car, KeyRound, Mail, Pencil, Plus, Sparkles, Trash2, User, UserCheck, Users, X } from 'lucide-react'
+import { AlertCircle, Bell, Building2, Car, Clock, KeyRound, Mail, Pencil, Plus, Sparkles, Trash2, User, UserCheck, Users, X } from 'lucide-react'
 import { useState } from 'react'
 import { z } from 'zod'
 import { SectionHeader } from '@/components/layout/section-header'
@@ -1057,6 +1057,7 @@ export function ResidentsPage() {
       placeholder: 'Estado',
       options: [
         { value: 'true', label: 'Activo' },
+        { value: 'pending', label: 'Pendiente de activación' },
         { value: 'false', label: 'Inactivo' },
       ],
     },
@@ -1126,12 +1127,15 @@ export function ResidentsPage() {
     },
     {
       header: 'Estado',
-      cell: (row) => (
-        <StatusBadge
-          label={row.isActive ? 'Activo' : 'Inactivo'}
-          variant={row.isActive ? 'green' : 'slate'}
-        />
-      ),
+      cell: (row) => {
+        const isPendingFamily = !row.isActive && row.residentType?.code === 'family'
+        return (
+          <StatusBadge
+            label={row.isActive ? 'Activo' : isPendingFamily ? 'Pendiente de activación' : 'Inactivo'}
+            variant={row.isActive ? 'green' : isPendingFamily ? 'amber' : 'slate'}
+          />
+        )
+      },
     },
     {
       header: 'Desde',
@@ -1149,7 +1153,7 @@ export function ResidentsPage() {
           {canManage && (
             <Button
               size="sm"
-              variant={row.isActive ? 'secondary' : 'outline'}
+              variant={!row.isActive || row.residentType?.code === 'family' ? 'outline' : 'secondary'}
               className="h-7 text-xs"
               onClick={() => {
                 if (
@@ -1163,7 +1167,11 @@ export function ResidentsPage() {
               }}
               disabled={toggleActiveMutation.isPending}
             >
-              {row.isActive ? 'Inhabilitar' : 'Activar'}
+              {!row.isActive && row.residentType?.code === 'family'
+                ? 'Aprobar'
+                : row.isActive
+                  ? 'Inhabilitar'
+                  : 'Activar'}
             </Button>
           )}
         </div>
@@ -1181,7 +1189,7 @@ export function ResidentsPage() {
       />
 
       <div className="space-y-4 p-4 sm:p-6">
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className="grid gap-4 xl:grid-cols-4">
           <KpiCard
             label="Total"
             value={residentsQuery.data?.meta.total ?? 0}
@@ -1193,6 +1201,12 @@ export function ResidentsPage() {
             value={residents.filter((r) => r.isActive).length}
             detail="Residentes con estado activo."
             icon={<UserCheck className="size-5" />}
+          />
+          <KpiCard
+            label="Pendientes de activación"
+            value={residents.filter((r) => !r.isActive && r.residentType?.code === 'family').length}
+            detail="Familiares creados desde la app que esperan aprobación."
+            icon={<Clock className="size-5" />}
           />
           <KpiCard
             label="Sin apartamento"
