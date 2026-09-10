@@ -1857,6 +1857,182 @@ function AptDetailDialog({
   )
 }
 
+// ─── Quick exit dialog (global, no apartment needed) ──────────────────────────
+
+function QuickExitDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const queryClient = useQueryClient()
+  const [searchDoc, setSearchDoc] = useState('')
+  const [phase, setPhase] = useState<ApartmentExitPhase>({ kind: 'idle' })
+  const [submitting, setSubmitting] = useState(false)
+
+  const searchMutation = useMutation({
+    mutationFn: api.searchOpenAccessByDocument,
+    onSuccess: (result) => {
+      if (!result.visitor) {
+        setPhase({ kind: 'not_found' })
+        return
+      }
+      if (!result.openAccess) {
+        setPhase({ kind: 'no_open_access', visitor: result.visitor })
+        return
+      }
+      setPhase({ kind: 'ready', visitor: result.visitor, openAccess: result.openAccess })
+    },
+    onError: () => toast.error('No fue posible consultar el visitante'),
+  })
+
+  const exitMutation = useMutation({
+    mutationFn: (id: string) => api.registerExit(id),
+    onSuccess: () => {
+      toast.success('Salida registrada')
+      resetState()
+      void queryClient.invalidateQueries({ queryKey: ['access-audit'] })
+      void queryClient.invalidateQueries({ queryKey: ['access-audit-stats'] })
+      onClose()
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'No fue posible registrar la salida')),
+    onSettled: () => setSubmitting(false),
+  })
+
+  function resetState() {
+    setSearchDoc('')
+    setPhase({ kind: 'idle' })
+    setSubmitting(false)
+  }
+
+  const canScan = open && phase.kind !== 'ready'
+  useScanInput((value: string) => {
+    const doc = extractDocumentFromBarcode(value)
+    if (!doc) {
+      toast.error('Código no legible. En la cédula digital escanea el código MRZ (las 3 líneas de letras y números del reverso), no el QR.')
+      return
+    }
+    setSearchDoc(doc)
+    searchMutation.mutate(doc)
+  }, canScan)
+
+  function handleSearch() {
+    const document = searchDoc.trim()
+    if (!document) return
+    searchMutation.mutate(document)
+  }
+
+  function handleConfirmExit() {
+    if (phase.kind !== 'ready') return
+    if (submitting) return
+    setSubmitting(true)
+    exitMutation.mutate(phase.openAccess.id)
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) {
+          resetState()
+          onClose()
+        }
+      }}
+    >
+      <DialogContent className="w-[min(96vw,480px)] max-h-[90vh] p-0 overflow-hidden gap-0 flex flex-col">
+        <div className="bg-slate-800 px-5 py-4">
+          <DialogHeader>
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-white/60">
+              Control de acceso
+            </p>
+            <DialogTitle className="mt-0.5 flex items-center gap-2 text-2xl font-bold text-white">
+              <LogOut className="size-5" />
+              Salida rápida
+            </DialogTitle>
+            <DialogDescription className="text-xs text-white/60">
+              Busca por cédula y se cierra el último ingreso abierto, sin elegir apartamento.
+            </DialogDescription>
+          </DialogHeader>
+        </div>
+
+        <div className="min-h-0 flex-1 p-5 overflow-y-auto pb-6 touch-pan-y">
+          <div className="space-y-4">
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+              Buscar visitante
+            </p>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Número de cédula o documento"
+                value={searchDoc}
+                onChange={(e) => {
+                  setSearchDoc(e.target.value)
+                  if (phase.kind !== 'idle') setPhase({ kind: 'idle' })
+                }}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                disabled={searchMutation.isPending}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleSearch}
+                disabled={!searchDoc.trim() || searchMutation.isPending}
+              >
+                <Search className="size-4" />
+              </Button>
+            </div>
+
+            {phase.kind === 'not_found' && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                No existe un visitante con ese documento.
+              </div>
+            )}
+
+            {phase.kind === 'no_open_access' && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-slate-600">
+                <strong>{formatName(phase.visitor.name, phase.visitor.lastName)}</strong> no tiene un
+                ingreso abierto para registrar la salida.
+              </div>
+            )}
+
+            {phase.kind === 'ready' && (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-emerald-600">
+                    Ingreso abierto
+                  </p>
+                  <p className="mt-1 font-semibold text-slate-900">
+                    {formatName(phase.visitor.name, phase.visitor.lastName)}
+                  </p>
+                  {phase.visitor.document && (
+                    <p className="text-sm text-slate-500">CC {formatDocument(phase.visitor.document)}</p>
+                  )}
+                  {phase.openAccess.apartment && (
+                    <p className="text-sm text-slate-500">
+                      {phase.openAccess.apartment.tower ? `Torre ${phase.openAccess.apartment.tower} · ` : ''}
+                      Apt. {phase.openAccess.apartment.number}
+                    </p>
+                  )}
+                  <p className="text-sm text-slate-500">Entrada: {formatDate(phase.openAccess.entryTime)}</p>
+                  <p className="text-sm text-slate-500">
+                    {ACCESS_VISITOR_CATEGORY_OPTIONS.find((o) => o.value === phase.openAccess.visitorCategory)?.label ?? 'Visita'}
+                    {' · '}
+                    {ACCESS_ENTRY_OPTIONS.find((o) => o.value === phase.openAccess.entryType)?.label ?? 'A pie'}
+                  </p>
+                </div>
+
+                <Button
+                  type="button"
+                  className="w-full"
+                  onClick={handleConfirmExit}
+                  disabled={submitting || exitMutation.isPending}
+                >
+                  <LogOut className="mr-2 size-4" />
+                  Confirmar salida
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'building_map_selected_tower'
@@ -1884,6 +2060,7 @@ export function BuildingMapPage() {
   const [plateSearch, setPlateSearch] = useState('')
   const [plateSearchResult, setPlateSearchResult] = useState<PlateLocationResult | undefined>()
   const [plateSearchLoading, setPlateSearchLoading] = useState(false)
+  const [quickExitOpen, setQuickExitOpen] = useState(false)
 
   function selectTower(id: string) {
     setSelectedTowerId(id)
@@ -2083,6 +2260,18 @@ export function BuildingMapPage() {
                 onSelectApartment={selectApartmentById}
               />
 
+              {canManageAccess && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-9 shrink-0 gap-2"
+                  onClick={() => setQuickExitOpen(true)}
+                >
+                  <LogOut className="size-4 text-slate-400" />
+                  Salida rápida
+                </Button>
+              )}
+
               {(canManagePackages || canNotify) && (
                 <div className="flex items-center gap-3 shrink-0 pl-1">
                   {canManagePackages && (
@@ -2193,6 +2382,8 @@ export function BuildingMapPage() {
           canCall={canCall}
         />
       )}
+
+      <QuickExitDialog open={quickExitOpen} onClose={() => setQuickExitOpen(false)} />
     </div>
   )
 }
